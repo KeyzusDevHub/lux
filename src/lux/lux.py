@@ -983,11 +983,15 @@ class LUX(BaseEstimator):
         uarff += '@attribute class {' + domain + '}\n'
 
         uarff += '@data\n'
-        for i in range(0, X.shape[0]):
-            for j in range(0, X.shape[1]):
-                if X_importances is not None:
-                    uarff += f'{X.iloc[i, j]}[{X_importances.iloc[i, j]}],'
-                else:
-                    uarff += f'{X.iloc[i, j]}[1],'
-            uarff += ';'.join([f'{c}[{p}]' for c, p in zip(class_names, y[i, :])]) + '\n'
+        if X_importances is None:
+            for x_i, y_i in zip(X.to_numpy(), y):
+                for x_ij in x_i:
+                    uarff += f'{x_ij}[1],'
+                uarff += ';'.join([f'{c}[{p}]' for c, p in zip(class_names, y_i)]) + '\n'
+        else:
+            for x_i, ximp_i, y_i in zip(X.to_numpy(), X_importances.to_numpy(), y):
+                for x_ij, ximp_ij in zip(x_i, ximp_i):
+                    uarff += f'{x_ij}[{ximp_ij}],'
+                uarff += ';'.join([f'{c}[{p}]' for c, p in zip(class_names, y_i)]) + '\n'
+                
         return uarff
