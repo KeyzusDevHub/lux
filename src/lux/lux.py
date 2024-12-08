@@ -100,6 +100,7 @@ class LUX(BaseEstimator):
         self.min_generate_samples = min_generate_samples
         self.oversampling_strategy = oversampling_strategy
         self.uncertainty_sigma = uncertainty_sigma
+        self.uarff_name_dict = {}
 
         if classifier is None:
             self.oversampling_strategy = self.OS_STRATEGY_SMOTE
@@ -180,6 +181,11 @@ class LUX(BaseEstimator):
             The trained LUX explainer model.
         :rtype: lux.lux.LUX
         """
+
+        for name in X.columns:
+            name_without_special_characters = re.sub(r'[^a-zA-Z0-9]', '', name)
+            if name != name_without_special_characters:
+                self.uarff_name_dict[name] = name_without_special_characters
 
         if class_names is None:
             class_names = np.unique(y)
@@ -310,6 +316,8 @@ class LUX(BaseEstimator):
         y_train_sample = np.zeros(y_train_sample_proba.shape)
         for i in range(0, len(y_train_sample)):
             y_train_sample[i, hot[i]] = 1
+
+        X_train_sample = X_train_sample.rename(columns=self.uarff_name_dict)
 
         uarff = LUX.generate_uarff(self.process_input(X_train_sample), y_train_sample, X_importances=X_train_sample_importances,
                                    categorical=categorical, class_names=class_names)
@@ -797,6 +805,9 @@ class LUX(BaseEstimator):
                           index=X.index)  # This is not used, but Data resered last
 
         X = pd.concat((X, y), axis=1)
+
+        X = X.rename(columns=self.uarff_name_dict)
+        
         XData = Data.parse_dataframe(X, 'lux')
         return [int(f.get_name()) for f in self.uid3.predict(XData.get_instances())]
 
@@ -816,13 +827,37 @@ class LUX(BaseEstimator):
 
         y = pd.Series(np.arange(X.shape[0]), name='target_unused',
                       index=X.index)  # This is not used, but Data resered last
+        
         X = pd.concat((X, y), axis=1)
+
+        X = X.rename(columns=self.uarff_name_dict)
+
         XData = Data.parse_dataframe(X, 'lux')
 
+        reverse_uarff_name_dict = {v: k for k, v in self.uarff_name_dict.items()}
+
         if to_dict:
-            return [self.uid3.tree.justification_tree(i).to_dict(reduce=reduce) for i in XData.get_instances()]
+            result_ruleset = []
+            for instance in XData.get_instances():
+                ruleset = self.uid3.tree.justification_tree(instance).to_dict(reduce=reduce)
+                rule = ruleset[0]['rule']
+                for uarff, original in reverse_uarff_name_dict.items():
+                    if rule.get(uarff) is not None:
+                        rule[original] = rule[uarff]
+                        del rule[uarff]
+                    for key, value in rule.items():
+                        rule[key] = [s.replace(uarff, original) for s in value]
+                ruleset[0]['rule'] = rule
+                result_ruleset.append(ruleset)
+            return result_ruleset
         else:
-            return [self.uid3.tree.justification_tree(i).to_pseudocode(reduce=reduce) for i in XData.get_instances()]
+            result_ruleset = []
+            for instance in XData.get_instances():
+                rule = self.uid3.tree.justification_tree(instance).to_pseudocode(reduce=reduce)
+                for uarff, original in reverse_uarff_name_dict.items():
+                    rule = rule.replace(uarff, original)
+                result_ruleset.append(rule)
+            return result_ruleset
 
     def __get_covered(self, rule, dataset, features, categorical=None):
         """ Returns covered instances from a given dataset and a rule
@@ -914,7 +949,22 @@ class LUX(BaseEstimator):
                         rule['distance'] = dist
                 else:
                     raise ValueError("Counterfactual representative can be either 'medoid' or 'nearest'")
+        
+        reverse_uarff_name_dict = {uarff: original for original, uarff in self.uarff_name_dict.items()}
 
+        for cf_info in counterfactual_rules:
+            rule = cf_info['rule']
+            for uarff, original in reverse_uarff_name_dict.items():
+                if rule.get(uarff) is not None:
+                    rule[original] = rule[uarff]
+                    del rule[uarff]
+                for key, value in rule.items():
+                    rule[key] = [s.replace(uarff, original) for s in value]
+            cf_info['rule'] = rule
+
+            cf_info['covered'] = cf_info['covered'].rename(columns=reverse_uarff_name_dict)
+            cf_info['counterfactual'] = cf_info['counterfactual'].rename(index=reverse_uarff_name_dict)
+        
         # find closest representative to the instance_to_explain and return as counterfactual, along with rules
         counterfactual_rules = sorted(counterfactual_rules, key=lambda d: d['distance'])
         if topn is None:

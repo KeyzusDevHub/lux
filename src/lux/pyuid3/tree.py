@@ -312,7 +312,7 @@ class Tree:
         return result+[c for c in conditions if operators_mapping['eq'] in c]
     
     def save_dot(self, filename: str, fmt=None,  visual=False, background_data:pd.DataFrame=None, 
-                instance2explain=None, counterfactual=None) -> None:
+                instance2explain=None, counterfactual=None, uarff_name_dict = None) -> None:
         f = open(filename, "w")
         if visual:
             if background_data is not None:
@@ -321,9 +321,9 @@ class Tree:
                 if counterfactual is not None and not isinstance(counterfactual, pd.DataFrame):
                     counterfactual=pd.DataFrame(counterfactual)
             f.write(self.to_dot_visual(parent=None, fmt=fmt, background_data=background_data,
-                                      instance2explain=instance2explain, counterfactual=counterfactual))
+                                      instance2explain=instance2explain, counterfactual=counterfactual, uarff_name_dict=uarff_name_dict))
         else:
-            f.write(self.to_dot(parent=None,fmt=fmt))
+            f.write(self.to_dot(parent=None, fmt=fmt, uarff_name_dict=uarff_name_dict))
         f.close()
 
     def get_class_attribute(self) -> Attribute:
@@ -386,7 +386,7 @@ class Tree:
 
             return self.fill_attributes(set(), root)
 
-    def to_dot(self, parent=None, fmt=None) -> str:
+    def to_dot(self, parent=None, fmt=None, uarff_name_dict=None) -> str:
         if parent:
             result = ""
             label = parent.get_att() + "\n"
@@ -406,12 +406,20 @@ class Tree:
                     value = value=te.get_value().get_name()
                 result += f"{hash(parent)}->{hash(te.get_child())}[label=\"{value}\n conf={round(te.get_value().get_confidence() * 100.0) / 100.0} \"]\n"
                 result += self.to_dot(te.get_child(),fmt=fmt)
-
+            
+            if uarff_name_dict != None:
+                for uarff, original in uarff_name_dict.items():
+                    result = result.replace(uarff, original)
+                    
             return result
 
         else:
             result = "digraph mediationTree{\n"
             result += self.to_dot(self.root,fmt=fmt)
+
+            if uarff_name_dict != None:
+                for uarff, original in uarff_name_dict.items():
+                    result = result.replace(uarff, original)
 
             return result+"\n}"
         
@@ -435,7 +443,7 @@ class Tree:
             value = value.replace(k,v)
         return value
 
-    def to_dot_visual(self, parent=None, background_data: pd.DataFrame=None, instance2explain=None, counterfactual=None, file_format='png', palette='Set2', fmt=None) -> str:
+    def to_dot_visual(self, parent=None, background_data: pd.DataFrame=None, instance2explain=None, counterfactual=None, file_format='png', palette='Set2', fmt=None, uarff_name_dict=None) -> str:
         path = '.'
         features=[]
         target_column = background_data.columns[-1]
@@ -473,6 +481,8 @@ class Tree:
                 if len(stats) > 0:
                     for patch, label in zip(ax.patches, [f'{l:.2f}%' for l in list(
                             background_data[[target_column]].value_counts(normalize=True).sort_index() * 100)]):
+                        if  uarff_name_dict != None and uarff_name_dict.get(label) != None:
+                            label = uarff_name_dict.get(label)
                         ax.annotate(label,
                                     (patch.get_x() + patch.get_width() / 2., patch.get_height() / 2),
                                     ha='center', va='center')
@@ -503,7 +513,13 @@ class Tree:
                         if counterfactual is not None:
                             ax = grid.axes
                             ax.plot(counterfactual[features[0]],counterfactual[parent.get_att()], 'ob', markersize=8)
-                        grid.axes.set_title(f"{parent.get_att()}",fontsize=20)
+                        title = parent.get_att()
+                        if  uarff_name_dict != None and uarff_name_dict.get(title) != None:
+                            title = uarff_name_dict.get(title)
+                        grid.axes.set_title(f"{title}",fontsize=20)
+                        grid.axes.set_ylabel(f"{title}")
+                        if  uarff_name_dict != None and uarff_name_dict.get(grid.axes.get_xlabel()) != None:
+                            grid.axes.set_xlabel(f"{uarff_name_dict.get(grid.axes.get_xlabel())}")
                         data = background_data.eval(re.sub("[<>=]","",te.get_value().get_name())).to_frame(parent.get_att())
                         data[features[0]] = background_data[features[0]]
                         sns.lineplot(data=data,x=features[0],y=parent.get_att(), linestyle='--',color='r')
@@ -513,7 +529,11 @@ class Tree:
                         grid=sns.displot(background_data, x=parent.get_att(),hue=target_column,kind='hist',fill=True,height=3,
                                          palette=palette,aspect=3,alpha=0.5)
                         ax = grid.axes[0][0]
-                        ax.set_title(f"{parent.get_att()}",fontsize=20)
+                        title = parent.get_att()
+                        if uarff_name_dict != None and uarff_name_dict.get(title) != None:
+                            title = uarff_name_dict.get(title)
+                        ax.set_title(f"{title}",fontsize=20)
+                        ax.set_xlabel(f"{title}")
                         ax.axvline(float(re.sub("[<>=]","",te.get_value().get_name())),linestyle='--',color='r')
                         if instance2explain is not None:
                             ax.plot(instance2explain[parent.get_att()],1, 'or', markersize=8)
@@ -526,7 +546,11 @@ class Tree:
                     value=self.__format_expression(value,fmt)
                 else:
                     value = value=te.get_value().get_name()
-                    
+
+                if uarff_name_dict != None:
+                    for uarff, original in uarff_name_dict.items():
+                        value = value.replace(uarff, original)
+
                 result += f"{hash(parent)}->{hash(te.get_child())}[label=\"{value}\n conf={round(te.get_value().get_confidence() * 100.0) / 100.0} \"]\n"
                 sibling_instance2explain=instance2explain
                 sibling_counterfactual=counterfactual
@@ -538,7 +562,7 @@ class Tree:
                         sibling_counterfactual=None 
                 result += self.to_dot_visual(parent=te.get_child(),background_data=sibling_data,
                                             instance2explain=sibling_instance2explain, 
-                                            counterfactual=sibling_counterfactual,palette=palette,fmt=fmt)
+                                            counterfactual=sibling_counterfactual,palette=palette,fmt=fmt, uarff_name_dict=uarff_name_dict)
 
             return result
 
@@ -547,7 +571,7 @@ class Tree:
             palette = dict(zip(background_data[target_column].unique(),sns.color_palette(palette,background_data[target_column].nunique())))
 
             result = "digraph mediationTree{\n"
-            result += self.to_dot_visual(parent=self.root, background_data=background_data,instance2explain=instance2explain, counterfactual=counterfactual, palette=palette,fmt=fmt)
+            result += self.to_dot_visual(parent=self.root, background_data=background_data,instance2explain=instance2explain, counterfactual=counterfactual, palette=palette,fmt=fmt, uarff_name_dict=uarff_name_dict)
 
             return result+"\n}"
 
